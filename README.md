@@ -1,18 +1,18 @@
-# google-scholar #
+# google-scholar-extended #
 
-nodejs module for searching google scholar
+nodejs module for searching google scholar and listing profile information
 
 
 ## getting started ##
 
-1. `npm install google-scholar --save`
-1. require the module `let scholar = require('google-scholar')`
-1. get searching!
+1. `npm install google-scholar-extended --save`
+2. require the module `let scholar = require('google-scholar-extended')`
+3. enter a search term
 
 ```
 'use strict'
 
-let scholar = require('google-scholar')
+let scholar = require('google-scholar-extended')
 
 scholar.search('chairmouse')
   .then(resultsObj => {
@@ -20,18 +20,29 @@ scholar.search('chairmouse')
   })
 ```
 
-## new in v1.5.0: `scholar.all` ##
-
 If you would prefer to get all results at once rather than paginated, you can use scholar.all rather than scholar.search to retrieve all of the results. as in: 
 
 ```
 'use strict'
 
-let scholar = require('google-scholar')
+let scholar = require('google-scholar-extended')
 
 scholar.all('chairmouse')
   .then(resultsObj => {
     console.log(resultsObj) // this will have all ~112 results
+  })
+```
+
+Get the information contained in a Google Scholar profile:
+
+```
+'use strict'
+
+let scholar = require('google-scholar-extended')
+
+scholar.profile('ukfCWkAAAAAJ')
+  .then(resultsObj => {
+    console.log(resultsObj)
   })
 ```
 
@@ -45,15 +56,16 @@ the results obj has 4 fields:
         - `title`
         - `url`
         - `authors`
-        - `description`
+        - `description` (search only)
         - `citedCount`
         - `citedUrl`
-        - `relatedUrl`
-* `nextUrl`: the URL for the next set of results from google scholar
-* `prevUrl`: the URL for the previous set of results from google scholar
-* `next`: function that returns a promise which will resolve to a `resultsObj` containing the next results
-* `previous`: function that returns a promise which will resolve to a `resultsObj` containing the previous results
-* Paging next/prev added in v1.2.0
+        - `relatedUrl` (search only)
+        - `venue` (profile only)
+        - `year` (profile only)
+* `nextUrl`: (search only) the URL for the next set of results from google scholar
+* `prevUrl`: (search only) the URL for the previous set of results from google scholar
+* `next`: (search only) function that returns a promise which will resolve to a `resultsObj` containing the next results
+* `previous`: (search only) function that returns a promise which will resolve to a `resultsObj` containing the previous results
 
 ### Example `resultsObj` for query "ChairMouse" ###
 
