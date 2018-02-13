@@ -14,9 +14,13 @@ let scholar = (function () {
   const RESULTS_PER_PAGE = 10
 
   const GOOGLE_SCHOLAR_URL = 'https://scholar.google.com/scholar?hl=en&q='
+  const GOOGLE_SCHOLAR_PROFILE_URL = 'https://scholar.google.co.uk/citations?hl=en&user='
   const GOOGLE_SCHOLAR_URL_PREFIX = 'https://scholar.google.com'
 
+  const ELLIPSIS = '...';
   const ELLIPSIS_HTML_ENTITY = '&#x2026;'
+  const COMMA = ',';
+  const COMMA_HTML_ENTITY = '&#xFFFD;'
   const ET_AL_NAME = 'et al.'
   const CITATION_COUNT_PREFIX = 'Cited by '
   const RELATED_ARTICLES_PREFIX = 'Related articles'
@@ -28,9 +32,8 @@ let scholar = (function () {
   // regex with thanks to http://stackoverflow.com/a/5917250/1449799
   const RESULT_COUNT_RE = /\W*((\d+|\d{1,3}(,\d{3})*)(\.\d+)?) results/
 
-  function scholarResultsCallback (resolve, reject) {
-    return function (error, response, html) {
-      if (error) {
+  function responseAction(error, response, html, callback) {
+	  if (error) {
         reject(error)
       } else if (response.statusCode !== 200) {
         if (response.statusCode === STATUS_CODE_FOR_RATE_LIMIT && response.statusMessage === STATUS_MESSAGE_FOR_RATE_LIMIT && response.body.indexOf(STATUS_MESSAGE_BODY) > -1) {
@@ -39,154 +42,277 @@ let scholar = (function () {
           reject(new Error('expected statusCode 200 on http response, but got: ' + response.statusCode))
         }
       } else {
-        let $ = cheerio.load(html)
-
-        let results = $('.gs_r')
-        let resultCount = 0
-        let nextUrl = ''
-        let prevUrl = ''
-        if ($('.gs_ico_nav_next').parent().attr('href')) {
-          nextUrl = GOOGLE_SCHOLAR_URL_PREFIX + $('.gs_ico_nav_next').parent().attr('href')
-        }
-        if ($('.gs_ico_nav_previous').parent().attr('href')) {
-          prevUrl = GOOGLE_SCHOLAR_URL_PREFIX + $('.gs_ico_nav_previous').parent().attr('href')
-        }
-
-        let processedResults = []
-        results.each((i, r) => {
-          $(r).find('.gs_ri h3 span').remove()
-          let title = $(r).find('.gs_ri h3').text().trim()
-          let url = $(r).find('.gs_ri h3 a').attr('href')
-          let authorNamesHTMLString = $(r).find('.gs_ri .gs_a').html()
-          let etAl = false
-          let etAlBegin = false
-          let authors = []
-          let description = $(r).find('.gs_ri .gs_rs').text()
-          let footerLinks = $(r).find('.gs_ri .gs_fl a')
-          let citedCount = 0
-          let citedUrl = ''
-          let relatedUrl = ''
-          let pdfUrl = $($(r).find('.gs_ggsd a')[0]).attr('href')
-
-          if ($(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
-            citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
-          }
-          if ($(footerLinks[0]).attr &&
-            $(footerLinks[0]).attr('href') &&
-            $(footerLinks[0]).attr('href').length > 0) {
-            citedUrl = GOOGLE_SCHOLAR_URL_PREFIX + $(footerLinks[0]).attr('href')
-          }
-          if (footerLinks &&
-            footerLinks.length &&
-            footerLinks.length > 0) {
-            if ($(footerLinks[0]).text &&
-              $(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
-              citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
-            }
-
-            if ($(footerLinks[1]).text &&
-              $(footerLinks[1]).text().indexOf(RELATED_ARTICLES_PREFIX) >= 0 &&
-              $(footerLinks[1]).attr &&
-              $(footerLinks[1]).attr('href') &&
-              $(footerLinks[1]).attr('href').length > 0) {
-              relatedUrl = GOOGLE_SCHOLAR_URL_PREFIX + $(footerLinks[1]).attr('href')
-            }
-          }
-          if (authorNamesHTMLString) {
-            let cleanString = authorNamesHTMLString.substr(0, authorNamesHTMLString.indexOf(' - '))
-            if (cleanString.substr(cleanString.length - ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY) {
-              etAl = true
-              cleanString = cleanString.substr(0, cleanString.length - ELLIPSIS_HTML_ENTITY.length)
-            }
-            if (cleanString.substr(0, ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY) {
-              etAlBegin = true
-              cleanString = cleanString.substr(ELLIPSIS_HTML_ENTITY.length + 2)
-            }
-            let htmlAuthorNames = cleanString.split(', ')
-            if (etAl) {
-              htmlAuthorNames.push(ET_AL_NAME)
-            }
-            if (etAlBegin) {
-              htmlAuthorNames.unshift(ET_AL_NAME)
-            }
-            authors = htmlAuthorNames.map(name => {
-              let tmp = cheerio.load(name)
-              let authorObj = {
-                name: '',
-                url: ''
-              }
-              if (tmp('a').length === 0) {
-                authorObj.name = striptags(name)
-              } else {
-                authorObj.name = tmp('a').text()
-                authorObj.url = GOOGLE_SCHOLAR_URL_PREFIX + tmp('a').attr('href')
-              }
-              return authorObj
-            })
-          }
-
-          processedResults.push({
-            title: title,
-            url: url,
-            authors: authors,
-            description: description,
-            citedCount: citedCount,
-            citedUrl: citedUrl,
-            relatedUrl: relatedUrl,
-            pdf: pdfUrl
-          })
-        })
-
-        let resultsCountString = $('#gs_ab_md').text()
-        if (resultsCountString && resultsCountString.trim().length > 0) {
-          let matches = RESULT_COUNT_RE.exec(resultsCountString)
-          if (matches && matches.length > 0) {
-            resultCount = parseInt(matches[1].replace(/,/g, ''))
-          } else {
-            resultCount = processedResults.length
-          }
-        } else {
-          resultCount = processedResults.length
-        }
-
-        resolve({
-          results: processedResults,
-          count: resultCount,
-          nextUrl: nextUrl,
-          prevUrl: prevUrl,
-          next: function () {
-            let p = new Promise(function (resolve, reject) {
-              perMinThrottle(() => {
-                perSecThrottle(() => {
-                  var requestOptions = {
-                    jar: true
-                  }
-                  requestOptions.url = nextUrl
-                  request(requestOptions, scholarResultsCallback(resolve, reject))
-                })
-              })
-            })
-            return p
-          },
-          previous: function () {
-            let p = new Promise(function (resolve, reject) {
-              perMinThrottle(() => {
-                perSecThrottle(() => {
-                  var requestOptions = {
-                    jar: true
-                  }
-                  requestOptions.url = prevUrl
-                  request(requestOptions, scholarResultsCallback(resolve, reject))
-                })
-              })
-            })
-            return p
-          }
-        })
+    	  	callback(html);
       }
-    }
   }
+  function scholarResultsCallback (resolve, reject) {
+    return function (error, response, html) {
+      responseAction(error, response, html, function callback(html) {
+	    	  let $ = cheerio.load(html)
+	
+	      let results = $('.gs_r')
+	      let resultCount = 0
+	      let nextUrl = ''
+	      let prevUrl = ''
+	      if ($('.gs_ico_nav_next').parent().attr('href')) {
+	        nextUrl = GOOGLE_SCHOLAR_URL_PREFIX + $('.gs_ico_nav_next').parent().attr('href')
+	      }
+	      if ($('.gs_ico_nav_previous').parent().attr('href')) {
+	        prevUrl = GOOGLE_SCHOLAR_URL_PREFIX + $('.gs_ico_nav_previous').parent().attr('href')
+	      }
+	
+	      let processedResults = []
+	      results.each((i, r) => {
+	        $(r).find('.gs_ri h3 span').remove()
+	        let title = $(r).find('.gs_ri h3').text().trim()
+	        let url = $(r).find('.gs_ri h3 a').attr('href')
+	        let authorNamesHTMLString = $(r).find('.gs_ri .gs_a').html()
+	        let etAl = false
+	        let etAlBegin = false
+	        let authors = []
+	        let description = $(r).find('.gs_ri .gs_rs').text()
+	        let footerLinks = $(r).find('.gs_ri .gs_fl a')
+	        let citedCount = 0
+	        let citedUrl = ''
+	        let relatedUrl = ''
+	        let pdfUrl = $($(r).find('.gs_ggsd a')[0]).attr('href')
+	
+	        if ($(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
+	          citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
+	        }
+	        if ($(footerLinks[0]).attr &&
+	          $(footerLinks[0]).attr('href') &&
+	          $(footerLinks[0]).attr('href').length > 0) {
+	          citedUrl = GOOGLE_SCHOLAR_URL_PREFIX + $(footerLinks[0]).attr('href')
+	        }
+	        if (footerLinks &&
+	          footerLinks.length &&
+	          footerLinks.length > 0) {
+	          if ($(footerLinks[0]).text &&
+	            $(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
+	            citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
+	          }
+	
+	          if ($(footerLinks[1]).text &&
+	            $(footerLinks[1]).text().indexOf(RELATED_ARTICLES_PREFIX) >= 0 &&
+	            $(footerLinks[1]).attr &&
+	            $(footerLinks[1]).attr('href') &&
+	            $(footerLinks[1]).attr('href').length > 0) {
+	            relatedUrl = GOOGLE_SCHOLAR_URL_PREFIX + $(footerLinks[1]).attr('href')
+	          }
+	        }
+	        if (authorNamesHTMLString) {
+	          let cleanString = authorNamesHTMLString.substr(0, authorNamesHTMLString.indexOf(' - '))
+	          if (cleanString.substr(cleanString.length - ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY) {
+	            etAl = true
+	            cleanString = cleanString.substr(0, cleanString.length - ELLIPSIS_HTML_ENTITY.length)
+	          }
+	          if (cleanString.substr(0, ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY) {
+	            etAlBegin = true
+	            cleanString = cleanString.substr(ELLIPSIS_HTML_ENTITY.length + 2)
+	          }
+	          let htmlAuthorNames = cleanString.split(', ')
+	          if (etAl) {
+	            htmlAuthorNames.push(ET_AL_NAME)
+	          }
+	          if (etAlBegin) {
+	            htmlAuthorNames.unshift(ET_AL_NAME)
+	          }
+	          authors = htmlAuthorNames.map(name => {
+	            let tmp = cheerio.load(name)
+	            let authorObj = {
+	              name: '',
+	              url: ''
+	            }
+	            if (tmp('a').length === 0) {
+	              authorObj.name = striptags(name)
+	            } else {
+	              authorObj.name = tmp('a').text()
+	              authorObj.url = GOOGLE_SCHOLAR_URL_PREFIX + tmp('a').attr('href')
+	            }
+	            return authorObj
+	          })
+	        }
+	
+	        processedResults.push({
+	          title: title,
+	          url: url,
+	          authors: authors,
+	          description: description,
+	          citedCount: citedCount,
+	          citedUrl: citedUrl,
+	          relatedUrl: relatedUrl,
+	          pdf: pdfUrl
+	        })
+	      })
+	
+	      let resultsCountString = $('#gs_ab_md').text()
+	      if (resultsCountString && resultsCountString.trim().length > 0) {
+	        let matches = RESULT_COUNT_RE.exec(resultsCountString)
+	        if (matches && matches.length > 0) {
+	          resultCount = parseInt(matches[1].replace(/,/g, ''))
+	        } else {
+	          resultCount = processedResults.length
+	        }
+	      } else {
+	        resultCount = processedResults.length
+	      }
+	
+	      resolve({
+	        results: processedResults,
+	        count: resultCount,
+	        nextUrl: nextUrl,
+	        prevUrl: prevUrl,
+	        next: function () {
+	          let p = new Promise(function (resolve, reject) {
+	            perMinThrottle(() => {
+	              perSecThrottle(() => {
+	                var requestOptions = {
+	                  jar: true
+	                }
+	                requestOptions.url = nextUrl
+	                request(requestOptions, scholarResultsCallback(resolve, reject))
+	              })
+	            })
+	          })
+	          return p
+	        },
+	        previous: function () {
+	          let p = new Promise(function (resolve, reject) {
+	            perMinThrottle(() => {
+	              perSecThrottle(() => {
+	                var requestOptions = {
+	                  jar: true
+	                }
+	                requestOptions.url = prevUrl
+	                request(requestOptions, scholarResultsCallback(resolve, reject))
+	              })
+	            })
+	          })
+	          return p
+	        }
+	      })
+	   }); 
+     }
+  }
+  
+  function scholarProfileResultsCallback(resolve, reject) {
+    return function (error, response, html) {
+      responseAction(error, response, html, function callback(html) {
+    	      let $ = cheerio.load(html)
+	      let results = $('.gsc_a_tr')
+	      let resultCount = 0
 
+	      let processedResults = []
+	      results.each((i, r) => {
+	        let title = $(r).find('.gsc_a_t a').text().trim()
+	        let url = $(r).find('.gs_ri h3 a').attr('href')
+	        let authorNamesHTMLString = $(r).find('.gs_gray').html()
+	        let etAl = false
+	        let etAlBegin = false
+	        let authors = []
+	        let description = $(r).find('.gs_ri .gs_rs').text()
+	        let footerLinks = $(r).find('.gsc_a_c a')
+	        let citedCount = 0
+	        let citedUrl = ''
+	        let relatedUrl = ''
+	        let pdfUrl = $($(r).find('.gs_ggsd a')[0]).attr('href')
+	        let year = $(r).find('.gsc_a_y').text()
+	        $(r).find('.gs_gray').last().find('.gs_oph').remove()
+	        let venueHTMLString = $(r).find('.gs_gray').last().html()
+	
+	        if ($(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
+	          citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
+	        }
+	        if ($(footerLinks[0]).attr &&
+	          $(footerLinks[0]).attr('href') &&
+	          $(footerLinks[0]).attr('href').length > 0) {
+	          citedUrl = GOOGLE_SCHOLAR_URL_PREFIX + $(footerLinks[0]).attr('href')
+	        }
+	        // Relax restrictions as no 'Cited by' prefix.
+	        if (footerLinks &&
+	          footerLinks.length &&
+	          footerLinks.length > 0) {
+	          if ($(footerLinks[0]).text) {
+	            citedCount = $(footerLinks[0]).text()
+	          }
+	
+	          if ($(footerLinks[1]).text &&
+	            $(footerLinks[1]).text().indexOf(RELATED_ARTICLES_PREFIX) >= 0 &&
+	            $(footerLinks[1]).attr &&
+	            $(footerLinks[1]).attr('href') &&
+	            $(footerLinks[1]).attr('href').length > 0) {
+	            relatedUrl = GOOGLE_SCHOLAR_URL_PREFIX + $(footerLinks[1]).attr('href')
+	          }
+	        }
+	        if (authorNamesHTMLString) {
+	          let cleanString = authorNamesHTMLString;
+	          // Check also for non-HTML ellipsis.
+	          if (cleanString.substr(cleanString.length - (ELLIPSIS_HTML_ENTITY.length)) === ELLIPSIS_HTML_ENTITY || cleanString.substr(cleanString.length - ELLIPSIS.length) === ELLIPSIS) {
+	            etAl = true
+	            cleanString = cleanString.substr(0, cleanString.length - ELLIPSIS_HTML_ENTITY.length)
+	          }
+	          if (cleanString.substr(0, ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY || cleanString.substr(0, ELLIPSIS.length) === ELLIPSIS) {
+	            etAlBegin = true
+	            cleanString = cleanString.substr(ELLIPSIS_HTML_ENTITY.length + 2)
+	          }
+	          
+	          let htmlAuthorNames = cleanString.split(', ')
+	          if (etAl) {
+	            htmlAuthorNames.push(ET_AL_NAME)
+	          }
+	          if (etAlBegin) {
+	            htmlAuthorNames.unshift(ET_AL_NAME)
+	          }
+	          authors = htmlAuthorNames.map(name => {
+	            let tmp = cheerio.load(name)
+	            let authorObj = {
+	              name: '',
+	              url: ''
+	            }
+	            if (tmp('a').length === 0) {
+	              authorObj.name = striptags(name)
+	            } else {
+	              authorObj.name = tmp('a').text()
+	              authorObj.url = GOOGLE_SCHOLAR_URL_PREFIX + tmp('a').attr('href')
+	            }
+	            return authorObj
+	          })
+	        }
+	        
+	        let venue;
+	        if ( venueHTMLString ) {
+	        	  if (venueHTMLString.substr(venueHTMLString.length - (ELLIPSIS_HTML_ENTITY.length)) === ELLIPSIS_HTML_ENTITY || venueHTMLString.substr(venueHTMLString.length - ELLIPSIS.length) === ELLIPSIS) {
+	        		  venue = venueHTMLString.substr(0, venueHTMLString.length - ELLIPSIS_HTML_ENTITY.length)
+
+	        	  if (venue.substr(venue.length - (COMMA_HTML_ENTITY.length)) === COMMA_HTML_ENTITY || venue.substr(venue.length - COMMA.length) === COMMA) {
+	        		  venue = venue.substr(0, venue.length - COMMA_HTML_ENTITY.length)
+	        	  }
+	        	  }
+	        }
+	        processedResults.push({
+	          title: title,
+	          url: url,
+	          authors: authors,
+	          description: description,
+	          citedCount: citedCount,
+	          citedUrl: citedUrl,
+	          relatedUrl: relatedUrl,
+	          pdf: pdfUrl,
+	          year: year,
+	          venue: venue
+	        })
+	        
+	        
+	      })
+	      
+	      resolve({
+	        results: processedResults
+	      })
+	   }); 
+     }
+  }
+  
   function search (query) {
     let p = new Promise(function (resolve, reject) {
       perMinThrottle(() => {
@@ -196,6 +322,21 @@ let scholar = (function () {
           }
           requestOptions.url = encodeURI(GOOGLE_SCHOLAR_URL + query)
           request(requestOptions, scholarResultsCallback(resolve, reject))
+        })
+      })
+    })
+    return p
+  }
+  
+  function profile (id) {
+    let p = new Promise(function (resolve, reject) {
+      perMinThrottle(() => {
+        perSecThrottle(() => {
+          var requestOptions = {
+            jar: true
+          }
+          requestOptions.url = encodeURI(GOOGLE_SCHOLAR_PROFILE_URL + id)
+          request(requestOptions, scholarProfileResultsCallback(resolve, reject))
         })
       })
     })
@@ -235,7 +376,8 @@ let scholar = (function () {
 
   return {
     search: search,
-    all: all
+    all: all,
+    profile: profile
   }
 })()
 
