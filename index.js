@@ -33,18 +33,35 @@ let scholar = (function () {
   const RESULT_COUNT_RE = /\W*((\d+|\d{1,3}(,\d{3})*)(\.\d+)?) results/
 
   function responseAction(error, response, html, callback) {
-	  if (error) {
-        reject(error)
-      } else if (response.statusCode !== 200) {
-        if (response.statusCode === STATUS_CODE_FOR_RATE_LIMIT && response.statusMessage === STATUS_MESSAGE_FOR_RATE_LIMIT && response.body.indexOf(STATUS_MESSAGE_BODY) > -1) {
-          reject(new Error('you are being rate-limited by google. you have made too many requests too quickly. see: https://support.google.com/websearch/answer/86640'))
-        } else {
-          reject(new Error('expected statusCode 200 on http response, but got: ' + response.statusCode))
-        }
+    if (error) {
+	  reject(error)
+    } else if (response.statusCode !== 200) {
+      if (response.statusCode === STATUS_CODE_FOR_RATE_LIMIT && response.statusMessage === STATUS_MESSAGE_FOR_RATE_LIMIT && response.body.indexOf(STATUS_MESSAGE_BODY) > -1) {
+	    reject(new Error('you are being rate-limited by google. you have made too many requests too quickly. see: https://support.google.com/websearch/answer/86640'))
       } else {
-    	  	callback(html);
-      }
+	    reject(new Error('expected statusCode 200 on http response, but got: ' + response.statusCode))
+	  }
+    } else {
+      callback(html);
+    }
   }
+  
+  function removeFromEnd(string, remove, callback) {
+	if (string.substr(string.length - remove.length) === remove) {
+      callback(true, string.substr(0, string.length - remove.length));
+    } else {
+    	  callback(false, string);
+    }
+  }
+  
+  function removeFromBeginning(string, remove, callback) {
+	if (string.substr(0, remove.length) === remove) {
+      callback(true, string.substr(remove.length + 2));
+    } else {
+    	  callback(false, string);
+    }
+  }
+  
   function scholarResultsCallback (resolve, reject) {
     return function (error, response, html) {
       responseAction(error, response, html, function callback(html) {
@@ -88,6 +105,7 @@ let scholar = (function () {
 	        if (footerLinks &&
 	          footerLinks.length &&
 	          footerLinks.length > 0) {
+	          citedCount = $(footerLinks[0]).text();
 	          if ($(footerLinks[0]).text &&
 	            $(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
 	            citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
@@ -102,15 +120,23 @@ let scholar = (function () {
 	          }
 	        }
 	        if (authorNamesHTMLString) {
-	          let cleanString = authorNamesHTMLString.substr(0, authorNamesHTMLString.indexOf(' - '))
-	          if (cleanString.substr(cleanString.length - ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY) {
-	            etAl = true
-	            cleanString = cleanString.substr(0, cleanString.length - ELLIPSIS_HTML_ENTITY.length)
-	          }
-	          if (cleanString.substr(0, ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY) {
-	            etAlBegin = true
-	            cleanString = cleanString.substr(ELLIPSIS_HTML_ENTITY.length + 2)
-	          }
+	        	  let cleanString = authorNamesHTMLString;
+	        	  if ( authorNamesHTMLString.indexOf(' - ') != -1 ) cleanString = authorNamesHTMLString.substr(0, authorNamesHTMLString.indexOf(' - '));
+	        	  
+	          ellipsisAtEnd(cleanString, ELLIPSIS_HTML_ENTITY, function(result, string) { 
+	        	    if ( result ) { 
+	        	      etAl = true; 
+	        	    	  cleanString = string
+	        	    	}
+	        	  });
+	          
+	          ellipsisAtBeginning(cleanString, ELLIPSIS_HTML_ENTITY, function(result, string) { 
+	        	    if ( result ) { 
+	        	      etAlBegin = true; 
+	        	      cleanString = string
+	        	    	}
+	        	  });
+	          
 	          let htmlAuthorNames = cleanString.split(', ')
 	          if (etAl) {
 	            htmlAuthorNames.push(ET_AL_NAME)
@@ -196,31 +222,43 @@ let scholar = (function () {
      }
   }
   
-  function scholarProfileResultsCallback(resolve, reject) {
+  function scholarProfileResultsCallback(resolve, reject, RESULTS_TAG, TITLE_TAG, URL_TAG, AUTHOR_NAMES_TAG, FOOTER_LINKS_TAG) {
     return function (error, response, html) {
       responseAction(error, response, html, function callback(html) {
     	      let $ = cheerio.load(html)
-	      let results = $('.gsc_a_tr')
+    	      
+	      let results = $(RESULTS_TAG)
 	      let resultCount = 0
-
+	      let nextUrl = ''
+	      let prevUrl = ''
+	      if ($('.gs_ico_nav_next').parent().attr('href')) {
+	        nextUrl = GOOGLE_SCHOLAR_URL_PREFIX + $('.gs_ico_nav_next').parent().attr('href')
+	      }
+	      if ($('.gs_ico_nav_previous').parent().attr('href')) {
+	        prevUrl = GOOGLE_SCHOLAR_URL_PREFIX + $('.gs_ico_nav_previous').parent().attr('href')
+	      }
+	      
 	      let processedResults = []
 	      results.each((i, r) => {
-	        let title = $(r).find('.gsc_a_t a').text().trim()
-	        let url = $(r).find('.gs_ri h3 a').attr('href')
-	        let authorNamesHTMLString = $(r).find('.gs_gray').html()
+	        let title = $(r).find(TITLE_TAG).text().trim()
+	        let url = $(r).find(URL_TAG).attr('href')
+	        let authorNamesHTMLString = $(r).find(AUTHOR_NAMES_TAG).html()
 	        let etAl = false
 	        let etAlBegin = false
 	        let authors = []
 	        let description = $(r).find('.gs_ri .gs_rs').text()
-	        let footerLinks = $(r).find('.gsc_a_c a')
+	        let footerLinks = $(r).find(FOOTER_LINKS_TAG)
 	        let citedCount = 0
 	        let citedUrl = ''
 	        let relatedUrl = ''
 	        let pdfUrl = $($(r).find('.gs_ggsd a')[0]).attr('href')
+	        
+	        // Profile specific
 	        let year = $(r).find('.gsc_a_y').text()
 	        $(r).find('.gs_gray').last().find('.gs_oph').remove()
 	        let venueHTMLString = $(r).find('.gs_gray').last().html()
-	
+	        let venue;
+	        
 	        if ($(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
 	          citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
 	        }
@@ -229,13 +267,16 @@ let scholar = (function () {
 	          $(footerLinks[0]).attr('href').length > 0) {
 	          citedUrl = GOOGLE_SCHOLAR_URL_PREFIX + $(footerLinks[0]).attr('href')
 	        }
-	        // Relax restrictions as no 'Cited by' prefix.
+	        
 	        if (footerLinks &&
 	          footerLinks.length &&
 	          footerLinks.length > 0) {
-	          if ($(footerLinks[0]).text) {
-	            citedCount = $(footerLinks[0]).text()
-	          }
+	          // Relax restrictions as no 'Cited by' prefix.
+	        	  citedCount = $(footerLinks[0]).text();
+  	          if ($(footerLinks[0]).text &&
+  	            $(footerLinks[0]).text().indexOf(CITATION_COUNT_PREFIX) >= 0) {
+  	            citedCount = $(footerLinks[0]).text().substr(CITATION_COUNT_PREFIX.length)
+  	          }
 	
 	          if ($(footerLinks[1]).text &&
 	            $(footerLinks[1]).text().indexOf(RELATED_ARTICLES_PREFIX) >= 0 &&
@@ -247,15 +288,31 @@ let scholar = (function () {
 	        }
 	        if (authorNamesHTMLString) {
 	          let cleanString = authorNamesHTMLString;
+	          
 	          // Check also for non-HTML ellipsis.
-	          if (cleanString.substr(cleanString.length - (ELLIPSIS_HTML_ENTITY.length)) === ELLIPSIS_HTML_ENTITY || cleanString.substr(cleanString.length - ELLIPSIS.length) === ELLIPSIS) {
-	            etAl = true
-	            cleanString = cleanString.substr(0, cleanString.length - ELLIPSIS_HTML_ENTITY.length)
-	          }
-	          if (cleanString.substr(0, ELLIPSIS_HTML_ENTITY.length) === ELLIPSIS_HTML_ENTITY || cleanString.substr(0, ELLIPSIS.length) === ELLIPSIS) {
-	            etAlBegin = true
-	            cleanString = cleanString.substr(ELLIPSIS_HTML_ENTITY.length + 2)
-	          }
+	          removeFromEnd(cleanString, ELLIPSIS_HTML_ENTITY, function(resultA, stringA) { 
+	        	    removeFromEnd(cleanString, ELLIPSIS, function(resultB, stringB) {
+	        	    	  if ( resultA ) {
+	        	    	  	cleanString = stringA;
+	        	    	  } else if ( resultB ) {
+	        	       	cleanString = stringB;
+	        	      } else if ( resultA || resultB ) {
+	        	        etAl = true; 
+	        	      }
+	        	    	});
+	        	  });
+	          
+	          removeFromBeginning(cleanString, ELLIPSIS_HTML_ENTITY, function(resultA, stringA) { 
+	        	    removeFromBeginning(cleanString, ELLIPSIS, function(resultB, stringB) {
+	        	    	  if ( resultA ) {
+	        	    	  	cleanString = stringA;
+	        	    	  } else if ( resultB ) {
+	        	       	cleanString = stringB;
+	        	      } else if ( resultA || resultB ) {
+	        	        etAlBegin = true; 
+	        	      }
+	        	    	});
+	        	  });
 	          
 	          let htmlAuthorNames = cleanString.split(', ')
 	          if (etAl) {
@@ -280,16 +337,31 @@ let scholar = (function () {
 	          })
 	        }
 	        
-	        let venue;
 	        if ( venueHTMLString ) {
-	        	  if (venueHTMLString.substr(venueHTMLString.length - (ELLIPSIS_HTML_ENTITY.length)) === ELLIPSIS_HTML_ENTITY || venueHTMLString.substr(venueHTMLString.length - ELLIPSIS.length) === ELLIPSIS) {
-	        		  venue = venueHTMLString.substr(0, venueHTMLString.length - ELLIPSIS_HTML_ENTITY.length)
-
-	        	  if (venue.substr(venue.length - (COMMA_HTML_ENTITY.length)) === COMMA_HTML_ENTITY || venue.substr(venue.length - COMMA.length) === COMMA) {
-	        		  venue = venue.substr(0, venue.length - COMMA_HTML_ENTITY.length)
-	        	  }
-	        	  }
+	        	  
+	          let venue = venueHTMLString;
+	          
+	        	  removeFromEnd(venue, ELLIPSIS_HTML_ENTITY, function(resultA, stringA) { 
+	        	    removeFromEnd(venue, ELLIPSIS, function(resultB, stringB) {
+	        	    	  if ( resultA ) {
+	        	    	  	venue = stringA;
+	        	    	  } else if ( resultB ) {
+	        	       	venue = stringB;
+	        	      }
+	        	    	  removeFromEnd(venue, COMMA_HTML_ENTITY, function(resultC, stringC) { 
+	      	        removeFromEnd(venue, COMMA, function(resultD, stringD) {
+	      	        	if ( resultC ) {
+	        	    	  	  venue = stringC;
+	        	    	    } else if ( resultD ) {
+	        	       	  venue = stringD;
+	        	        }
+	      	        });
+	        	    	  });
+	        	    	});
+	        	  });
+	        	  
 	        }
+	        
 	        processedResults.push({
 	          title: title,
 	          url: url,
@@ -303,11 +375,53 @@ let scholar = (function () {
 	          venue: venue
 	        })
 	        
-	        
 	      })
 	      
+	      let resultsCountString = $('#gs_ab_md').text()
+	      if (resultsCountString && resultsCountString.trim().length > 0) {
+	        let matches = RESULT_COUNT_RE.exec(resultsCountString)
+	        if (matches && matches.length > 0) {
+	          resultCount = parseInt(matches[1].replace(/,/g, ''))
+	        } else {
+	          resultCount = processedResults.length
+	        }
+	      } else {
+	        resultCount = processedResults.length
+	      }
+	
 	      resolve({
-	        results: processedResults
+	        results: processedResults,
+	        count: resultCount,
+	        nextUrl: nextUrl,
+	        prevUrl: prevUrl,
+	        next: function () {
+	          let p = new Promise(function (resolve, reject) {
+	            perMinThrottle(() => {
+	              perSecThrottle(() => {
+	                var requestOptions = {
+	                  jar: true
+	                }
+	                requestOptions.url = nextUrl
+	                request(requestOptions, scholarResultsCallback(resolve, reject))
+	              })
+	            })
+	          })
+	          return p
+	        },
+	        previous: function () {
+	          let p = new Promise(function (resolve, reject) {
+	            perMinThrottle(() => {
+	              perSecThrottle(() => {
+	                var requestOptions = {
+	                  jar: true
+	                }
+	                requestOptions.url = prevUrl
+	                request(requestOptions, scholarResultsCallback(resolve, reject))
+	              })
+	            })
+	          })
+	          return p
+	        }
 	      })
 	   }); 
      }
@@ -336,7 +450,7 @@ let scholar = (function () {
             jar: true
           }
           requestOptions.url = encodeURI(GOOGLE_SCHOLAR_PROFILE_URL + id)
-          request(requestOptions, scholarProfileResultsCallback(resolve, reject))
+          request(requestOptions, scholarProfileResultsCallback(resolve, reject, '.gsc_a_tr', '.gsc_a_t a', '.gs_ri h3 a', '.gs_gray', '.gsc_a_c a'))
         })
       })
     })

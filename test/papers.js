@@ -14,6 +14,7 @@ describe('papers', () => {
 		expect(scholar.search("chairmouse")).to.eventually.be.an('object').then(function(promiseResults) {
 			
 			results = promiseResults;
+			console.log(JSON.stringify(results));
 		
 		}).should.notify(done);
 		
