@@ -4,7 +4,7 @@
   "description": "nodejs module for searching google scholar",
   "main": "index.js",
   "scripts": {
-    "test": "./node_modules/.bin/mocha --reporter spec"
+    "test": "./node_modules/.bin/mocha --exit"
   },
   "repository": {
     "type": "git",
@@ -23,7 +23,8 @@
     "throttled-queue": "^1.0.4"
   },
   "devDependencies": {
-    "chai": "^3.5.0",
-    "mocha": "^2.5.3"
+    "chai": "^4.1.2",
+    "mocha": "^5.0.0",
+    "chai-as-promised": "^7.1.1"
   }
 }
