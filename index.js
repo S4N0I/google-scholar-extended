@@ -180,7 +180,7 @@ let scholar = (function () {
 	        // Profile specific.
 	        if ( venueHTMLString ) {
 	        	  
-	          let venue = venueHTMLString;
+	          venue = venueHTMLString;
 	          
 	        	  removeFromEnd(venue, ELLIPSIS_HTML_ENTITY, function(resultA, stringA) { 
 	        	    removeFromEnd(venue, ELLIPSIS, function(resultB, stringB) {
